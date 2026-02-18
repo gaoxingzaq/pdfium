@@ -1,12 +1,10 @@
-import { promises as fs } from "node:fs";
-import sharp from "sharp";
-
+import { promises as fs, promises } from "node:fs";
 import { toMatchImageSnapshot } from "jest-image-snapshot";
-import { test, describe, expect, beforeAll, afterAll } from "vitest";
+import sharp from "sharp";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { type PDFiumDocument, PDFiumLibrary, PDFiumPage, PDFiumPageRenderOptions } from "../src/index.esm";
+import { type PDFiumDocument, PDFiumLibrary, PDFiumPage, type PDFiumPageRenderOptions } from "../src/index.esm";
 import type { PDFiumImageObject } from "../src/objects";
-
 
 expect.extend({ toMatchImageSnapshot });
 
@@ -27,11 +25,6 @@ async function renderFunction(options: PDFiumPageRenderOptions) {
     .toBuffer();
 }
 
-
-test("adds 1 + 2 to equal 3", () => {
-  expect(1 + 2).toBe(3);
-});
-
 describe("PDFium", () => {
   let library: PDFiumLibrary;
   beforeAll(async () => {
@@ -44,10 +37,7 @@ describe("PDFium", () => {
     library?.destroy();
   });
 
-  async function loadDocument(
-    filename: string,
-    callback: (document: PDFiumDocument) => Promise<void>,
-  ) {
+  async function loadDocument(filename: string, callback: (document: PDFiumDocument) => Promise<void>) {
     const buff = await fs.readFile(`test/data/${filename}`);
     const document = await library.loadDocument(buff);
     await callback(document);
@@ -123,9 +113,7 @@ describe("PDFium", () => {
         expect(buff.width).toBe(A4_SIZE.width * 3);
         expect(buff.originalHeight).toBe(A4_SIZE.height);
         expect(buff.originalWidth).toBe(A4_SIZE.width);
-        expect(buff.data.length).toBe(
-          A4_SIZE.height * 3 * A4_SIZE.width * 3 * 4,
-        );
+        expect(buff.data.length).toBe(A4_SIZE.height * 3 * A4_SIZE.width * 3 * 4);
       });
     });
 
@@ -160,7 +148,7 @@ describe("PDFium", () => {
     test("should render a sharp image of a page with custom smaller width and height", async () => {
       await loadDocument("test_1.pdf", async (document) => {
         const result = await document.getPage(0).render({
-          // original size is 595x841, but let's try use different proportions to see how it works
+          // original size is 595x841, but let"s try use different proportions to see how it works
           width: 100,
           height: 100,
           render: renderFunction,
@@ -345,9 +333,9 @@ describe("PDFium", () => {
             height: 1309,
             filters: ["FlateDecode"],
           },
-        ]
+        ];
 
-        const result: any[] = [];
+        const result: { size: number; width: number; height: number; filters: string[] }[] = [];
         for (const page of document.pages()) {
           for (const object of page.objects()) {
             if (object.type === "image") {
@@ -359,17 +347,16 @@ describe("PDFium", () => {
                 width: image.width,
                 height: image.height,
                 filters: image.filters,
-              })
+              });
             }
           }
         }
-        expect(result).toMatchObject(expected)
+        expect(result).toMatchObject(expected);
       });
     });
 
     test("get page object image jpeg", async () => {
       await loadDocument("test_4_with_images.pdf", async (document) => {
-
         for (const page of document.pages()) {
           for (const object of page.objects()) {
             if (object.type === "image") {
@@ -387,7 +374,7 @@ describe("PDFium", () => {
                   })
                     .jpeg()
                     .toBuffer();
-                }
+                },
               });
               // we can't use "toMatchImageSnapshot" here because it doesn't support jpeg
               expect(image.data).toBeDefined();
@@ -419,7 +406,7 @@ describe("PDFium", () => {
     });
   });
 
-    test("should render an image of a page without form elements (2)", async () => {
+  test("should render an image of a page without form elements (2)", async () => {
     await loadDocument("test_7_with_form.pdf", async (document) => {
       const result = await document.getPage(0).render({
         scale: 3,
@@ -449,5 +436,89 @@ describe("PDFium", () => {
       });
       expect(result.data).toMatchImageSnapshot();
     });
+  });
+
+  test("should render a file in gray scale", async () => {
+    const buff = await fs.readFile(`test/data/test_3_with_images.pdf`);
+    const document = await library.loadDocument(buff);
+
+    const page = document.getPage(0);
+    const result = await page.render({
+      scale: 1,
+      colorSpace: "Gray",
+      render: async (options) => {
+        return await sharp(options.data, {
+          raw: {
+            width: options.width,
+            height: options.height,
+            channels: 1,
+          },
+        })
+          .png()
+          .toBuffer();
+      },
+    });
+
+    const fileName = "test_3_with_images_gray.png";
+
+    await promises.writeFile(fileName, result.data);
+
+    // file should exist
+    const stat = await promises.stat(fileName);
+
+    expect(stat.isFile()).toBe(true);
+
+    // comment this line if you want to see it
+    await promises.rm(fileName);
+    document.destroy();
+  });
+
+  test("should render gray scale", async () => {
+    const buff = await fs.readFile(`test/data/test_3_with_images.pdf`);
+    const document = await library.loadDocument(buff);
+
+    const page = document.getPage(0);
+    const result = await page.render({
+      scale: 1,
+      colorSpace: "Gray",
+      render: "bitmap",
+    });
+
+    const metadata = await sharp(result.data, {
+      raw: {
+        width: result.width,
+        height: result.height,
+        channels: 1,
+      },
+    }).metadata();
+
+    expect(metadata.channels).toBe(1);
+    expect(metadata.hasAlpha).toBe(false);
+    expect(result.data.length).toBe(result.width * result.height);
+
+    document.destroy();
+  });
+
+  test("scale should be 1 by default, colorSpace to BGRA and render function to bitmap (thus no arguments needed)", async () => {
+    const buff = await fs.readFile(`test/data/test_3_with_images.pdf`);
+    const document = await library.loadDocument(buff);
+
+    const page = document.getPage(0);
+    const result = await page.render();
+
+    const metadata = await sharp(result.data, {
+      raw: {
+        width: result.width,
+        height: result.height,
+        channels: 4,
+      },
+    }).metadata();
+
+    expect(metadata.channels).toBe(4);
+    expect(metadata.hasAlpha).toBe(true);
+    expect(metadata.space).toBe("srgb");
+    expect(result.data.length).toBe(result.width * result.height * 4);
+
+    document.destroy();
   });
 });

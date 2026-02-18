@@ -1,7 +1,8 @@
-import { BYTES_PER_PIXEL, FPDFBitmap, FPDFRenderFlag } from "./constants.js";
+import { FPDFBitmap, FPDFRenderFlag } from "./constants.js";
+import { DEFAULT_PAGE_RENDER_OPTIONS } from "./default.options.js";
 import type { PDFiumDocument } from "./document.js";
 import { type PDFiumObject, PDFiumObjectBase } from "./objects.js";
-import type { PDFiumPageRender, PDFiumPageRenderParams } from "./page.types.js";
+import type { PDFiumPageRender, PDFiumPageRenderOptionsValidated, PDFiumPageRenderParams } from "./page.types.js";
 import type { PDFiumRenderFunction, PDFiumRenderOptions } from "./types.js";
 import { convertBitmapToImage } from "./utils.js";
 import type * as t from "./vendor/pdfium.js";
@@ -11,7 +12,7 @@ export class PDFiumPage {
   private readonly pageIdx: number;
   private readonly documentIdx: number;
   private readonly document: PDFiumDocument;
-  number: number; // 0-based index of the page
+  readonly number: number; // zero based index of the page
 
   constructor(options: {
     module: t.PDFium;
@@ -27,21 +28,33 @@ export class PDFiumPage {
     this.number = options.pageIndex;
   }
 
+  getOriginalSize() {
+    const originalWidth = this.module._FPDF_GetPageWidth(this.pageIdx);
+    const originalHeight = this.module._FPDF_GetPageHeight(this.pageIdx);
+
+    return {
+      originalWidth,
+      originalHeight,
+    };
+  }
+
   /**
    * Get the size of the page in points (1/72 inch)
+   * Floored original values needed in testing. Scale can be a float number.
    */
-  getSize(precisely = false) {
-    const width = this.module._FPDF_GetPageWidth(this.pageIdx);
-    const height = this.module._FPDF_GetPageHeight(this.pageIdx);
-    if (precisely) {
-      return {
-        width: width,
-        height: height,
-      };
-    }
+  private getSize(renderOptions: PDFiumPageRenderOptionsValidated) {
+    const { scale, width, height } = renderOptions;
+
+    const { originalHeight, originalWidth } = this.getOriginalSize();
+
+    const computedWidth = Math.floor(width ?? originalWidth);
+    const computedHeight = Math.floor(height ?? originalHeight);
+
     return {
-      width: Math.floor(width),
-      height: Math.floor(height),
+      originalWidth: Math.floor(originalWidth),
+      originalHeight: Math.floor(originalHeight),
+      width: Math.floor(computedWidth * scale),
+      height: Math.floor(computedHeight * scale),
     };
   }
 
@@ -85,38 +98,28 @@ export class PDFiumPage {
     }
   }
 
-  async render(
-    options: PDFiumPageRenderParams = {
-      scale: 1,
-      render: "bitmap",
-    },
-  ): Promise<PDFiumPageRender> {
-    const { width: originalWidth, height: originalHeight } = this.getSize();
-
+  async render(options: PDFiumPageRenderParams = {}): Promise<PDFiumPageRender> {
     let formIdx: number | null = null;
+    const renderOptions: PDFiumPageRenderOptionsValidated = {
+      ...DEFAULT_PAGE_RENDER_OPTIONS,
+      ...options,
+    };
+
+    const { colorSpace, render } = renderOptions;
+    const { width, height, originalWidth, originalHeight } = this.getSize(renderOptions);
+
     if (options.renderFormFields) {
       formIdx = this.document.initializeFormFields(); // will be initialized only once
       this.module._FORM_OnAfterLoadPage(this.pageIdx, formIdx);
     }
 
-    // You can specify either the scale or the width and height.
-    let width: number;
-    let height: number;
-    if ("scale" in options) {
-      width = Math.floor(originalWidth * options.scale);
-      height = Math.floor(originalHeight * options.scale);
-    } else {
-      width = options.width;
-      height = options.height;
-    }
+    const bytesPerPixel = FPDFBitmap[colorSpace];
 
-    const buffSize = width * height * BYTES_PER_PIXEL;
-
-    // Allocate a block of memory for the bitmap and fill it with zeros.
+    const buffSize = width * height * bytesPerPixel;
     const ptr = this.module.wasmExports.malloc(buffSize);
-    this.module.HEAPU8.fill(0, ptr, ptr + buffSize);
 
-    const bitmap = this.module._FPDFBitmap_CreateEx(width, height, FPDFBitmap.BGRA, ptr, width * BYTES_PER_PIXEL);
+    const bitmap = this.module._FPDFBitmap_CreateEx(width, height, bytesPerPixel, ptr, width * bytesPerPixel);
+
     this.module._FPDFBitmap_FillRect(
       bitmap,
       0, // left
@@ -126,7 +129,9 @@ export class PDFiumPage {
       0xffffffff, // color (white)
     );
 
-    const flags = FPDFRenderFlag.REVERSE_BYTE_ORDER | FPDFRenderFlag.ANNOT | FPDFRenderFlag.LCD_TEXT;
+    let flags = FPDFRenderFlag.ANNOT | FPDFRenderFlag.LCD_TEXT;
+
+    flags = colorSpace === "Gray" ? flags | FPDFRenderFlag.GRAYSCALE : flags | FPDFRenderFlag.REVERSE_BYTE_ORDER;
 
     this.module._FPDF_RenderPageBitmap(
       bitmap,
@@ -138,6 +143,7 @@ export class PDFiumPage {
       0, // rotate (0, normal)
       flags, // flags
     );
+
     if (formIdx) {
       // Second draw pass – draw the interactive form widgets on top of previously draw call
       // Remove ANNOT flags to avoid rendering popup annotations (e.g. tooltips).
@@ -155,27 +161,27 @@ export class PDFiumPage {
       );
       this.module._FORM_OnBeforeClosePage(this.pageIdx, formIdx);
     }
+
     this.module._FPDFBitmap_Destroy(bitmap);
 
     // TODO: consider to create a separate function for closing the page and free
     // resources only when needed, not after every render
     this.module._FPDF_ClosePage(this.pageIdx);
 
-    const data = this.module.HEAPU8.slice(ptr, ptr + buffSize);
-    this.module.wasmExports.free(ptr);
-
     const image = await this.convertBitmapToImage({
-      render: options.render,
-      width: width,
-      height: height,
-      data: data,
+      render,
+      width,
+      height,
+      data: Buffer.from(this.module.HEAPU8.buffer, ptr, buffSize),
     });
 
+    this.module.wasmExports.free(ptr);
+
     return {
-      width: width,
-      height: height,
-      originalHeight: originalHeight,
-      originalWidth: originalWidth,
+      width,
+      height,
+      originalHeight,
+      originalWidth,
       data: image,
     };
   }

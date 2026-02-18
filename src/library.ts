@@ -12,7 +12,7 @@ const NO_OPTION_WARNING =
  * Converts a JavaScript string to a null-terminated C string and returns
  * a pointer to the allocated memory.
  *
- * Remeber to free the allocated memory using the `free` function after
+ * Remember to free the allocated memory using the `free` function after
  * you're done with the string.
  */
 function stringToCString(module: t.PDFium, str: string): number {

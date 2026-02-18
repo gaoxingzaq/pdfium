@@ -32,6 +32,7 @@ Then you can render the page to an image by calling `render` method of the page 
 
 - `scale` - scale factor for the image (default is 1, which means 72 DPI, 3 almost always is enough for good quality)
 - `render` - render engine to use, can be either `sharp`, `bitmap` (default is `bitmap`) or custom render function. If you need to render to PNG, it's recommended to use `sharp` render function.
+- `colorSpace` - color space to render to: `'BGRA'` (default, full color) or `'Gray'` (grayscale, useful for OCR)
 - `renderFormFields` - whether to render interactive form fields (default is `false`). Form fields are interactive elements like text boxes, checkboxes, dropdown menus, and signature fields that users can fill out in PDF documents (like tax forms, applications, or contracts).
 
 ```typescript
@@ -90,7 +91,7 @@ console.log(image.data); // PNG image data as a buffer
 
 #### render: `bitmap`
 
-`bitmap` is the default render engine. It renders PDF page to a bitmap image, which is a buffer of RGBA pixels (4 channels). You can use it to render to any image format, but you need to convert the bitmap to the desired format yourself. It's default render engine, because it doesn't require any additional dependencies.
+`bitmap` is the default render engine. It renders PDF page to a bitmap image, which is a buffer of RGBA pixels (4 channels) by default, or a single-channel grayscale buffer if `colorSpace: 'Gray'` is used. You can use it to render to any image format, but you need to convert the bitmap to the desired format yourself. It's default render engine, because it doesn't require any additional dependencies.
 
 Example:
 
